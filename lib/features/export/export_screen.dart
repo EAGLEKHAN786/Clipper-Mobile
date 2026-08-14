@@ -17,6 +17,7 @@ class ExportScreen extends ConsumerStatefulWidget {
 
 class _ExportScreenState extends ConsumerState<ExportScreen> {
   VideoPlayerController? _exportedVideoController;
+  String? _currentLoadedPath;
 
   @override
   void dispose() {
@@ -25,9 +26,14 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
   }
 
   void _initExportedPlayer(String path) {
+    if (_currentLoadedPath == path && _exportedVideoController != null) return;
+    _currentLoadedPath = path;
+    _exportedVideoController?.dispose();
+    _exportedVideoController = null;
+
     final file = File(path);
     if (file.existsSync() && file.lengthSync() > 1024) {
-      _exportedVideoController ??= VideoPlayerController.file(file)
+      _exportedVideoController = VideoPlayerController.file(file)
         ..initialize()
             .then((_) {
               if (mounted) setState(() {});
@@ -138,7 +144,8 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(clipperProvider);
 
-    if (state.lastExportedPath != null && _exportedVideoController == null) {
+    if (state.lastExportedPath != null &&
+        _currentLoadedPath != state.lastExportedPath) {
       _initExportedPlayer(state.lastExportedPath!);
     }
 

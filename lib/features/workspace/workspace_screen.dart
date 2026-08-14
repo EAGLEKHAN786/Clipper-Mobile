@@ -345,6 +345,7 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
     // just because `faceTrackedSegmentId` resets after a fresh project load.
     final needsFaceAnalysis =
         selectedSegment != null &&
+        state.faceTrackedSegmentId != selectedSegment.id &&
         selectedSegment.faceKeyframes.isEmpty &&
         state.faceTrackingWarning == null;
     if (needsFaceAnalysis && !state.faceTrackingRunning) {
@@ -635,7 +636,7 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
                                                 ).textTheme.titleLarge,
                                               ),
                                               Text(
-                                                'Pipeline: Whisper → NLP → LLM Lokal (Qwen 2.5)',
+                                                'Pipeline: Whisper AI → LLM Lokal (Qwen 2.5)',
                                                 style: TextStyle(
                                                   color: context
                                                       .appColors
@@ -817,19 +818,17 @@ class _WorkspaceScreenState extends ConsumerState<WorkspaceScreen> {
                                                     ),
                                                     Builder(
                                                       builder: (context) {
-                                                        final maxVal =
-                                                            (seg.endTime.inSeconds -
-                                                                    5)
-                                                                .toDouble()
-                                                                .clamp(
-                                                                  1.0,
-                                                                  99999.0,
-                                                                );
+                                                        final maxVal = (seg.endTime.inSeconds - 1)
+                                                            .toDouble()
+                                                            .clamp(1.0, 99999.0);
                                                         final currentVal = seg
                                                             .startTime
                                                             .inSeconds
                                                             .toDouble()
                                                             .clamp(0.0, maxVal);
+                                                        if (seg.endTime.inSeconds <= 1) {
+                                                          return const SizedBox.shrink();
+                                                        }
                                                         return Slider(
                                                           value: currentVal,
                                                           min: 0,

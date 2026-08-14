@@ -126,6 +126,32 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     await _refreshStatus();
   }
 
+  Future<void> _deleteLlm() async {
+    HapticFeedback.selectionClick();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Hapus Model LLM (Qwen 2.5)?'),
+        content: const Text(
+          'Model akan dihapus dari penyimpanan untuk menghemat ruang disk (~491 MB). Anda dapat mengunduhnya kembali kapan saja.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Batal'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Hapus'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _llm.deleteModelFile();
+    await _refreshStatus();
+  }
+
   String _sizeText(int? bytes) =>
       bytes == null ? '—' : '${(bytes / (1024 * 1024)).toStringAsFixed(0)} MB';
 
@@ -188,6 +214,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ],
               onChanged: (value) {
                 if (value == null) return;
+                _whisper.model = WhisperService.resolveModel(value);
                 ref.read(clipperProvider.notifier).setWhisperModel(value);
                 _refreshStatus();
               },
@@ -251,7 +278,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             downloading: _llmDownloading,
             progress: _llmProgress,
             onDownload: _downloadLlm,
-            onDelete: null,
+            onDelete: _llmSize != null ? _deleteLlm : null,
           ),
         ],
       ),

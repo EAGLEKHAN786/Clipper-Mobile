@@ -3,6 +3,8 @@
 *.log
 *.pyc
 *.swp
+.gradle/
+**/.gradle/
 .DS_Store
 .atom/
 .build/

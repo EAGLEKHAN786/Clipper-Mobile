@@ -1,32 +1,18 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:llamadart/llamadart.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/video_segment.dart';
+import 'whisper_service.dart';
 
-/// A single LLM-produced verdict for a video segment.
-class LlmSegmentVerdict {
-  final String segmentId;
-  final int score;
-  final String title;
-  final String summary;
-
-  const LlmSegmentVerdict({
-    required this.segmentId,
-    required this.score,
-    required this.title,
-    required this.summary,
-  });
-}
-
-/// On-device LLM grader (hybrid pipeline).
+/// On-device LLM segment detector and grader.
 ///
-/// NLP rule-based windows are decided by [HighlightDetectorService]; this
-/// service only grades those windows with a small local GGUF model and rewrites
-/// titles/summaries. The model is loaded from Hugging Face (cached by the
-/// llamadart download manager) and unloaded right after grading to free memory.
+/// Directly analyzes full timestamped Whisper transcripts with Qwen 2.5
+/// to identify the most engaging and viral Shorts/Reels segments (20-60s each),
+/// generating start/end bounds, viral scores, titles, and summaries.
 class LocalLlmService {
   /// Qwen2.5-0.5B-Instruct Q4_K_M (~491 MB) - balanced size/quality tradeoff.
   static const String modelSource =
@@ -35,8 +21,7 @@ class LocalLlmService {
   final ModelSource _source = ModelSource.parse(modelSource);
   String? _cacheDir;
 
-  /// App-private directory that hosts the downloaded GGUF model, kept stable
-  /// so the settings screen and the pipeline can agree on where it lives.
+  /// App-private directory that hosts the downloaded GGUF model.
   Future<String> _cacheDirectory() async {
     if (_cacheDir != null) return _cacheDir!;
     final support = await getApplicationSupportDirectory();
@@ -61,13 +46,29 @@ class LocalLlmService {
     return file.length();
   }
 
+  /// Deletes the cached LLM model file from storage.
+  Future<void> deleteModelFile() async {
+    final dir = await _cacheDirectory();
+    final file = File(_modelFilePath(dir));
+    if (await file.exists()) {
+      await file.delete();
+    }
+  }
+
   static const String _systemPrompt = '''
-Kamu adalah editor video AI yang ahli memilih momen paling menarik dari sebuah video untuk dijadikan Shorts/Reels/TikTok.
-Analisis setiap segmen percakapan lalu berikan:
-- score: angka 0-100 seberapa viralnya segmen ini (bukan potongan biasa, tapi yang memancing rasa penasaran, emosi, atau ajakan).
-- title: judul singkat dan menarik dalam bahasa Indonesia (maksimal 6 kata).
-- summary: ringkasan 1 kalimat dalam bahasa Indonesia.
-Balas HANYA dengan JSON berbentuk {"segments": [{"id": "...", "score": 90, "title": "...", "summary": "..."}]} tanpa teks lain.''';
+Kamu adalah editor video AI profesional untuk konten viral Shorts/Reels/TikTok.
+Tugasmu adalah menganalisis transkrip percakapan video dengan stempel waktu dan memilih segmen-segmen terbaik yang paling menarik/viral.
+
+Aturan Pemilihan Segmen:
+1. Durasi tiap segmen HARUS antara 20 detik hingga maksimal 60 detik (endSec - startSec antara 20 dan 60).
+2. Pilih momen yang memiliki hook kuat, poin penting, rahasia/tips, emosi, atau ajakan interaksi.
+3. Tentukan startSec dan endSec (dalam detik angka bulat atau desimal) sesuai stempel waktu transkrip.
+4. score: angka 80-100 seberapa menarik/viral segmen ini.
+5. title: judul singkat memikat dalam bahasa Indonesia (maksimal 6 kata).
+6. summary: ringkasan 1 kalimat dalam bahasa Indonesia.
+7. transcript: teks percakapan pada segmen tersebut.
+Balas HANYA dengan JSON valid berbentuk:
+{"segments": [{"startSec": 10, "endSec": 45, "score": 95, "title": "Judul Menarik", "summary": "Ringkasan segmen.", "transcript": "Teks percakapan..."}]} tanpa teks pengantar lainnya.''';
 
   LlamaEngine? _engine;
 
@@ -89,20 +90,23 @@ Balas HANYA dengan JSON berbentuk {"segments": [{"id": "...", "score": 90, "titl
     );
   }
 
-  /// Grades each window with the local LLM.
+  /// Analyzes the timestamped transcript directly and extracts viral [VideoSegment]s.
   ///
-  /// Returns an empty list when the model is unavailable or any error occurs,
-  /// so callers can keep the rule-based NLP verdicts untouched.
-  Future<List<LlmSegmentVerdict>> gradeSegments({
+  /// Returns an empty list if the model is unavailable or inference fails.
+  Future<List<VideoSegment>> detectSegments({
     required String videoTitle,
-    required List<VideoSegment> segments,
+    required Duration videoDuration,
+    required List<WhisperWord> words,
     Function(double progress)? onProgress,
   }) async {
-    if (segments.isEmpty) return const [];
+    if (words.isEmpty) return const [];
 
     try {
       await loadModel(onProgress: onProgress);
       if (!isModelLoaded) return const [];
+
+      final formattedTranscript = _formatTimestampedTranscript(words);
+      final totalSec = max(1, videoDuration.inSeconds);
 
       final messages = [
         LlamaChatMessage.fromText(
@@ -111,7 +115,7 @@ Balas HANYA dengan JSON berbentuk {"segments": [{"id": "...", "score": 90, "titl
         ),
         LlamaChatMessage.fromText(
           role: LlamaChatRole.user,
-          text: _buildUserPrompt(videoTitle, segments),
+          text: _buildUserPrompt(videoTitle, totalSec, formattedTranscript),
         ),
       ];
 
@@ -123,50 +127,125 @@ Balas HANYA dengan JSON berbentuk {"segments": [{"id": "...", "score": 90, "titl
           topP: 0.6,
           topK: 40,
           seed: 42,
-          maxTokens: 512,
+          maxTokens: 1024,
         ),
         enableThinking: false,
       );
 
-      return _decodeVerdicts(result);
+      return _decodeSegments(result, totalSec);
     } catch (_) {
       return const [];
     }
   }
 
-  String _buildUserPrompt(String videoTitle, List<VideoSegment> segments) {
-    final buffer = StringBuffer()
-      ..writeln('Judul video: ${_clip(videoTitle, 200)}')
-      ..writeln('Segmen yang harus dinilai:');
-    for (final s in segments) {
-      final transcript = _clip(s.transcript, 180);
+  /// Groups words into timestamped blocks (e.g. `[00:15 - 00:25] Teks...`)
+  /// so the LLM can easily understand timing without token bloat.
+  String _formatTimestampedTranscript(List<WhisperWord> words) {
+    if (words.isEmpty) return '';
+
+    final buffer = StringBuffer();
+    const groupDurationSec = 8.0;
+
+    var currentGroupStart = words.first.start.inMilliseconds / 1000.0;
+    var currentGroupWords = <String>[];
+
+    String formatTime(double sec) {
+      final m = (sec ~/ 60).toString().padLeft(2, '0');
+      final s = (sec.toInt() % 60).toString().padLeft(2, '0');
+      return '$m:$s';
+    }
+
+    for (final w in words) {
+      final startSec = w.start.inMilliseconds / 1000.0;
+      if (startSec - currentGroupStart >= groupDurationSec &&
+          currentGroupWords.isNotEmpty) {
+        final endSec = words[words.indexOf(w) - 1].end.inMilliseconds / 1000.0;
+        buffer.writeln(
+          '[${formatTime(currentGroupStart)} - ${formatTime(endSec)} (${currentGroupStart.toInt()}s-${endSec.toInt()}s)] ${currentGroupWords.join(" ")}',
+        );
+        currentGroupStart = startSec;
+        currentGroupWords = [];
+      }
+      currentGroupWords.add(w.word);
+    }
+
+    if (currentGroupWords.isNotEmpty) {
+      final endSec = words.last.end.inMilliseconds / 1000.0;
       buffer.writeln(
-        '{"id": "${s.id}", "durasi": "${s.startTime.inSeconds}-${s.endTime.inSeconds}s", '
-        '"transkrip": "$transcript"}',
+        '[${formatTime(currentGroupStart)} - ${formatTime(endSec)} (${currentGroupStart.toInt()}s-${endSec.toInt()}s)] ${currentGroupWords.join(" ")}',
       );
     }
+
     return buffer.toString();
   }
 
-  List<LlmSegmentVerdict> _decodeVerdicts(Map<String, dynamic> json) {
-    final raw = json['segments'];
-    if (raw is! List) return const [];
+  String _buildUserPrompt(
+    String videoTitle,
+    int totalSeconds,
+    String formattedTranscript,
+  ) {
+    return '''
+Judul Video: ${_clip(videoTitle, 150)}
+Total Durasi Video: $totalSeconds detik
 
-    final verdicts = <LlmSegmentVerdict>[];
-    for (final item in raw) {
+Transkrip Percakapan Bertimestamp:
+$formattedTranscript
+
+Pilih segmen-segmen terbaik (masing-masing 20 s/d 60 detik) untuk dijadikan Shorts/Reels!''';
+  }
+
+  List<VideoSegment> _decodeSegments(Map<String, dynamic> json, int totalSec) {
+    final raw = json['segments'];
+    if (raw is! List || raw.isEmpty) return const [];
+
+    final segments = <VideoSegment>[];
+    for (var i = 0; i < raw.length; i++) {
+      final item = raw[i];
       if (item is! Map<String, dynamic>) continue;
-      final segmentId = item['id']?.toString() ?? '';
-      if (segmentId.isEmpty) continue;
-      verdicts.add(
-        LlmSegmentVerdict(
-          segmentId: segmentId,
-          score: ((item['score'] as num?)?.toInt() ?? 0).clamp(0, 100),
-          title: item['title']?.toString() ?? '',
-          summary: item['summary']?.toString() ?? '',
+
+      var startSec = ((item['startSec'] as num?)?.toDouble() ?? 0.0).clamp(
+        0.0,
+        totalSec.toDouble(),
+      );
+      var endSec = ((item['endSec'] as num?)?.toDouble() ?? (startSec + 30.0))
+          .clamp(0.0, totalSec.toDouble());
+
+      if (endSec <= startSec) {
+        endSec = min(totalSec.toDouble(), startSec + 30.0);
+      }
+
+      // Ensure segment duration does not exceed 60s
+      if (endSec - startSec > 60.0) {
+        endSec = startSec + 60.0;
+      }
+
+      final score = ((item['score'] as num?)?.toDouble() ?? 88.0).clamp(
+        80.0,
+        99.5,
+      );
+      final title = item['title']?.toString().trim() ?? '';
+      final summary = item['summary']?.toString().trim() ?? '';
+      final transcript = item['transcript']?.toString().trim() ?? '';
+
+      segments.add(
+        VideoSegment(
+          id: 'seg_${i + 1}',
+          title: title.isNotEmpty ? title : '💡 Highlight Menarik #${i + 1}',
+          startTime: Duration(milliseconds: (startSec * 1000).round()),
+          endTime: Duration(milliseconds: (endSec * 1000).round()),
+          viralScore: double.parse(score.toStringAsFixed(1)),
+          summary: summary.isNotEmpty
+              ? summary
+              : 'Segmen pilihan AI dengan potensi engagement tinggi.',
+          transcript: transcript.isNotEmpty
+              ? transcript
+              : 'Transkrip otomatis dari Whisper AI.',
         ),
       );
     }
-    return verdicts;
+
+    segments.sort((a, b) => a.startTime.compareTo(b.startTime));
+    return segments;
   }
 
   /// Frees the model from memory after grading.

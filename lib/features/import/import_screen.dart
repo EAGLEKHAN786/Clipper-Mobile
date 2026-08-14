@@ -343,8 +343,8 @@ class _GenericLoadingView extends StatelessWidget {
   }
 }
 
-/// Multi-step checklist shown while the AI pipeline (transcription, NLP,
-/// local LLM grading) is running.
+/// Multi-step checklist shown while the AI pipeline (transcription &
+/// local LLM highlight segmentation) is running.
 class _AnalysisPipelineView extends StatelessWidget {
   final ClipperState state;
 
@@ -356,20 +356,14 @@ class _AnalysisPipelineView extends StatelessWidget {
   _steps = [
     (
       stage: AnalysisStage.transcribing,
-      title: 'Transkripsi Audio',
-      subtitle: 'Konversi suara menjadi teks',
+      title: 'Transkripsi Audio Whisper',
+      subtitle: 'Konversi suara menjadi teks kata-per-kata',
       icon: Icons.graphic_eq_rounded,
     ),
     (
-      stage: AnalysisStage.analyzingNlp,
-      title: 'Analisis Highlight (NLP)',
-      subtitle: 'Deteksi segmen paling menarik',
-      icon: Icons.auto_awesome_rounded,
-    ),
-    (
       stage: AnalysisStage.gradingLlm,
-      title: 'Penilaian LLM Lokal',
-      subtitle: 'Qwen 2.5 menilai skor viral & judul',
+      title: 'Analisis Highlight LLM Lokal',
+      subtitle: 'Qwen 2.5 menentukan segmen viral, judul & ringkasan',
       icon: Icons.psychology_rounded,
     ),
   ];

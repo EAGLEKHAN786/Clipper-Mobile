@@ -70,12 +70,28 @@ class _ClipItemCardState extends State<_ClipItemCard> {
   @override
   void initState() {
     super.initState();
+    _initController();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ClipItemCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.clipPath != widget.clipPath) {
+      _controller?.dispose();
+      _controller = null;
+      _isPlaying = false;
+      _initController();
+    }
+  }
+
+  void _initController() {
     final file = File(widget.clipPath);
     if (file.existsSync() && file.lengthSync() > 1024) {
       _controller = VideoPlayerController.file(file)
         ..initialize()
             .then((_) {
               if (mounted) setState(() {});
+              _controller?.setLooping(true);
             })
             .catchError((e) {
               debugPrint('Gagal memuat player: $e');

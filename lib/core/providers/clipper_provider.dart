@@ -18,7 +18,7 @@ import '../services/face_tracking_service.dart';
 import 'theme_provider.dart';
 
 /// Pipeline steps surfaced to the UI as a checklist while analyzing a video.
-enum AnalysisStage { idle, transcribing, analyzingNlp, gradingLlm, done }
+enum AnalysisStage { idle, transcribing, gradingLlm, done }
 
 class ClipperState {
   static const Object _unset = Object();
@@ -366,15 +366,15 @@ class ClipperNotifier extends StateNotifier<ClipperState> {
 
     state = state.copyWith(
       transcribedWords: words,
-      analysisStage: AnalysisStage.analyzingNlp,
+      analysisStage: AnalysisStage.gradingLlm,
       analysisProgress: 0.0,
-      statusMessage: 'Menganalisis segmen klip menarik (AI Auto-Highlight)...',
+      statusMessage: 'Menganalisis segmen terbaik dengan AI...',
     );
 
-    final finalSegments = await _gradeSegments(
+    final finalSegments = await _extractSegments(
       source,
       words,
-      statusPrefix: 'Menganalisis segmen klip menarik',
+      statusPrefix: 'Menganalisis segmen klip',
     );
 
     _upsertProject(source, videoFile, finalSegments, words: words);
@@ -390,30 +390,28 @@ class ClipperNotifier extends StateNotifier<ClipperState> {
     );
   }
 
-  /// Re-runs highlight detection + local LLM grading on the current video.
-  ///
-  /// When a cached transcript already exists, transcription is skipped so the
-  /// re-analysis only covers NLP + LLM grading (much faster).
+  /// Re-runs highlight detection with local LLM on the cached transcript.
   Future<void> reanalyzeSegments() async {
     final source = state.currentSource;
     final file = state.localVideoFile;
     if (source == null || file == null) return;
 
     final words = state.transcribedWords;
-    if (words.isEmpty) {
-      await _analyzeSource(source, file);
-      return;
-    }
 
     state = state.copyWith(
       isLoading: true,
-      analysisStage: AnalysisStage.analyzingNlp,
+      analysisStage: AnalysisStage.gradingLlm,
       analysisProgress: 0.0,
-      statusMessage: 'Menganalisis ulang segmen (AI Auto-Highlight)...',
+      statusMessage: 'Menganalisis ulang segmen...',
     );
 
     try {
-      final finalSegments = await _gradeSegments(
+      if (words.isEmpty) {
+        await _analyzeSource(source, file);
+        return;
+      }
+
+      final finalSegments = await _extractSegments(
         source,
         words,
         statusPrefix: 'Menganalisis ulang segmen',
@@ -439,76 +437,56 @@ class ClipperNotifier extends StateNotifier<ClipperState> {
     }
   }
 
-  /// NLP window detection followed by local LLM grading (hybrid pipeline).
-  Future<List<VideoSegment>> _gradeSegments(
+  /// Direct LLM highlight detection from Whisper transcript, with deterministic
+  /// fallback when the local LLM is not downloaded yet.
+  Future<List<VideoSegment>> _extractSegments(
     VideoSource source,
     List<WhisperWord> words, {
     required String statusPrefix,
   }) async {
+    final hasLlm = await _llmService.isModelDownloaded();
+
+    if (hasLlm && words.isNotEmpty) {
+      state = state.copyWith(
+        analysisStage: AnalysisStage.gradingLlm,
+        analysisProgress: 0.0,
+        statusMessage: 'Menganalisis segmen percakapan dengan LLM lokal (Qwen 2.5)...',
+      );
+
+      var llmSegments = <VideoSegment>[];
+      try {
+        llmSegments = await _llmService.detectSegments(
+          videoTitle: source.title,
+          videoDuration: source.duration,
+          words: words,
+          onProgress: (p) {
+            state = state.copyWith(
+              analysisStage: AnalysisStage.gradingLlm,
+              analysisProgress: p,
+              statusMessage:
+                  'Menganalisis segmen dengan LLM lokal (${(p * 100).toInt()}%)...',
+            );
+          },
+        );
+      } finally {
+        await _llmService.unloadModel();
+      }
+
+      if (llmSegments.isNotEmpty) {
+        return llmSegments;
+      }
+    }
+
     state = state.copyWith(
-      analysisStage: AnalysisStage.analyzingNlp,
-      analysisProgress: 0.0,
-      statusMessage: '$statusPrefix (AI Auto-Highlight)...',
+      statusMessage: hasLlm
+          ? '$statusPrefix — Selesai segmentasi.'
+          : '$statusPrefix — LLM belum diunduh, memakai segmentasi standar.',
     );
 
-    final detectedSegments = await _highlightDetector.detectHighlights(
+    return _highlightDetector.detectHighlights(
       source,
       transcribedWords: words,
     );
-
-    // The local LLM is optional: when it hasn't been downloaded yet in
-    // Pengaturan, keep the rule-based NLP verdicts (no in-workflow download).
-    if (!await _llmService.isModelDownloaded()) {
-      state = state.copyWith(
-        statusMessage: '$statusPrefix — LLM belum diunduh, memakai NLP saja.',
-      );
-      return detectedSegments;
-    }
-
-    state = state.copyWith(
-      analysisStage: AnalysisStage.gradingLlm,
-      analysisProgress: 0.0,
-      statusMessage: 'Menilai segmen dengan LLM lokal (Qwen 2.5)...',
-    );
-
-    var verdicts = const <LlmSegmentVerdict>[];
-    try {
-      verdicts = await _llmService.gradeSegments(
-        videoTitle: source.title,
-        segments: detectedSegments,
-        onProgress: (p) {
-          state = state.copyWith(
-            analysisStage: AnalysisStage.gradingLlm,
-            analysisProgress: p,
-            statusMessage:
-                'Menilai segmen dengan LLM lokal (${(p * 100).toInt()}%)...',
-          );
-        },
-      );
-    } finally {
-      await _llmService.unloadModel();
-    }
-
-    return _applyLlmVerdicts(detectedSegments, verdicts);
-  }
-
-  /// Hybrid pipeline: NLP decides the windows, the local LLM only rewrites
-  /// score/title/summary. Falls back to NLP verdicts when the LLM is empty.
-  List<VideoSegment> _applyLlmVerdicts(
-    List<VideoSegment> segments,
-    List<LlmSegmentVerdict> verdicts,
-  ) {
-    if (verdicts.isEmpty) return segments;
-    final byId = {for (final v in verdicts) v.segmentId: v};
-    return segments.map((seg) {
-      final verdict = byId[seg.id];
-      if (verdict == null) return seg;
-      return seg.copyWith(
-        title: verdict.title.isNotEmpty ? verdict.title : seg.title,
-        summary: verdict.summary.isNotEmpty ? verdict.summary : seg.summary,
-        viralScore: verdict.score.toDouble(),
-      );
-    }).toList();
   }
 
   void deleteProject(String projectId) {
@@ -569,8 +547,7 @@ class ClipperNotifier extends StateNotifier<ClipperState> {
   Future<VideoSegment?> runFaceTracking(VideoSegment segment) async {
     final file = state.localVideoFile;
     if (file == null) return null;
-    if (state.faceTrackedSegmentId == segment.id &&
-        segment.faceKeyframes.isNotEmpty) {
+    if (state.faceTrackedSegmentId == segment.id) {
       return state.segments.firstWhere(
         (s) => s.id == segment.id,
         orElse: () => segment,

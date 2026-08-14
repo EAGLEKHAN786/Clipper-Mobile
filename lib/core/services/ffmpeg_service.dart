@@ -120,7 +120,11 @@ class FFmpegService {
     final tempDir = await getTemporaryDirectory();
     final srtFile = File('${tempDir.path}/sub_${segment.id}.srt');
 
-    final words = segment.transcript.split(' ');
+    final words = segment.transcript
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .toList();
     final StringBuffer buffer = StringBuffer();
 
     int lineIndex = 1;
@@ -356,18 +360,23 @@ class FFmpegService {
       '-q:v',
       '4',
       '-y',
-      '${frameDir.path}/f_%03d.jpg',
+      '${frameDir.path}/f_%05d.jpg',
     ]);
 
     final rc = await session.getReturnCode();
     if (ReturnCode.isSuccess(rc)) {
+      final numPattern = RegExp(r'f_(\d+)\.jpg');
       final listFiles =
           frameDir
               .listSync()
               .whereType<File>()
               .where((f) => f.path.endsWith('.jpg'))
               .toList()
-            ..sort((a, b) => a.path.compareTo(b.path));
+            ..sort((a, b) {
+              final idxA = int.tryParse(numPattern.firstMatch(a.path)?.group(1) ?? '0') ?? 0;
+              final idxB = int.tryParse(numPattern.firstMatch(b.path)?.group(1) ?? '0') ?? 0;
+              return idxA.compareTo(idxB);
+            });
 
       for (var i = 0; i < listFiles.length; i++) {
         frames.add((

@@ -66,11 +66,10 @@ class InsightService {
   }
 
   DateTime? _parseDate(String raw) {
-    // RFC 822/1123: "Thu, 16 Jul 2026 11:11:23 +0000".
-    // Dart's HttpDate only accepts the literal "GMT" zone, so parse manually.
+    // RFC 822/1123: "Thu, 16 Jul 2026 11:11:23 +0000" or "... GMT" or "... +07:00".
     final match = RegExp(
       r'^\s*(?:[A-Za-z]{3},)?\s*(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})'
-      r'\s+(\d{2}):(\d{2}):(\d{2})\s*([+-]\d{4})?\s*$',
+      r'\s+(\d{2}):(\d{2}):(\d{2})\s*([+-]\d{2}:?\d{2}|[A-Za-z]{1,4})?\s*$',
     ).firstMatch(raw);
     if (match == null) return null;
 
@@ -90,10 +89,15 @@ class InsightService {
     final date = DateTime.utc(year, month, day, hour, minute, second);
     final zone = match.group(7);
     if (zone != null && zone.isNotEmpty) {
-      final sign = zone.startsWith('-') ? -1 : 1;
-      final hours = int.parse(zone.substring(1, 3));
-      final minutes = int.parse(zone.substring(3, 5));
-      return date.subtract(Duration(minutes: sign * (hours * 60 + minutes)));
+      if (zone.startsWith('+') || zone.startsWith('-')) {
+        final cleanZone = zone.replaceAll(':', '');
+        if (cleanZone.length >= 5) {
+          final sign = cleanZone.startsWith('-') ? -1 : 1;
+          final hours = int.parse(cleanZone.substring(1, 3));
+          final minutes = int.parse(cleanZone.substring(3, 5));
+          return date.subtract(Duration(minutes: sign * (hours * 60 + minutes)));
+        }
+      }
     }
     return date;
   }
