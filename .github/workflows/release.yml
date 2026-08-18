@@ -32,6 +32,12 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Set up Android SDK & NDK Licenses
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "ndk;29.0.13113456"
+          yes | flutter doctor --android-licenses || true
+
       - name: Install Dependencies
         run: flutter pub get
 
