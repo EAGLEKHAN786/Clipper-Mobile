@@ -214,13 +214,12 @@ class ClipperNotifier extends StateNotifier<ClipperState> {
   /// Pick a local video file from user device
   Future<void> pickLocalVideo() async {
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.pickFile(
         type: FileType.video,
-        allowMultiple: false,
       );
 
-      if (result != null && result.files.single.path != null) {
-        final filePath = result.files.single.path!;
+      if (result != null && result.path != null) {
+        final filePath = result.path!;
         final file = File(filePath);
 
         state = state.copyWith(
@@ -232,7 +231,7 @@ class ClipperNotifier extends StateNotifier<ClipperState> {
 
         final source = VideoSource(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
-          title: result.files.single.name,
+          title: result.name,
           pathOrUrl: filePath,
           type: VideoSourceType.local,
           duration: probe.duration,
