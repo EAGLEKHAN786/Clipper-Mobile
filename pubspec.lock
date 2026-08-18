@@ -161,13 +161,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.6.2"
-  ffmpeg_kit_flutter_new_min:
-    dependency: "direct overridden"
-    description:
-      path: "packages/ffmpeg_kit_flutter_new_min"
-      relative: true
-    source: path
-    version: "2.1.0"
   ffmpeg_kit_flutter_platform_interface:
     dependency: transitive
     description:
@@ -247,14 +240,6 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
-  freezed_annotation:
-    dependency: transitive
-    description:
-      name: freezed_annotation
-      sha256: "7294967ff0a6d98638e7acb774aac3af2550777accd8149c90af5b014e6d44d8"
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.1.0"
   google_fonts:
     dependency: "direct main"
     description:
@@ -267,17 +252,18 @@ packages:
     dependency: transitive
     description:
       name: google_mlkit_commons
-      sha256: "27d626c66a181351a953eba5b6ff1ff123aadb891b4dab085b292118f039d6ac"
+      sha256: "621e94de22fd0f1e902e593b892746d80ab7542b39c2552aa091d904eb82fc6f"
       url: "https://pub.dev"
     source: hosted
-    version: "0.7.1"
+    version: "0.13.0"
   google_mlkit_face_detection:
     dependency: "direct main"
     description:
-      path: "packages/google_mlkit_face_detection"
-      relative: true
-    source: path
-    version: "0.10.1"
+      name: google_mlkit_face_detection
+      sha256: dd4a6c61e45390217cdc7522e7766b77e9d075cdface0503716ec6722e33d4f4
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.15.1"
   hooks:
     dependency: transitive
     description:
@@ -787,14 +773,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.0"
-  universal_io:
-    dependency: transitive
-    description:
-      name: universal_io
-      sha256: f63cbc48103236abf48e345e07a03ce5757ea86285ed313a6a032596ed9301e2
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.3.1"
   url_launcher:
     dependency: "direct main"
     description:
@@ -947,14 +925,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.1"
-  whisper_ggml:
+  whisper_cpp_flutter_plus:
     dependency: "direct main"
     description:
-      name: whisper_ggml
-      sha256: "8236903d9430e83b30921200ad270451077fba740ec3974927f5db600082bd24"
+      name: whisper_cpp_flutter_plus
+      sha256: "8c43d7303fb6a30c7b5a364a7b0a9f5719ea54cf5599e7f2b59892deae383039"
       url: "https://pub.dev"
     source: hosted
-    version: "2.6.0"
+    version: "0.4.1"
   win32:
     dependency: transitive
     description:

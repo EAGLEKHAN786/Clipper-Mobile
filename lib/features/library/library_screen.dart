@@ -95,7 +95,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Impor atau unduh video YouTube/Lokal di tab Downloader.',
+                          'Impor video lokal dari galeri perangkat Anda di tab Impor Video.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: context.appColors.textSecondary,

@@ -247,19 +247,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _ModelCard(
             title: 'Whisper (Transkripsi)',
             description: selectedWhisperKey == 'tiny'
-                ? 'ggml-tiny.bin · ~75 MB · jauh lebih cepat, akurasi sedikit '
-                      'lebih rendah'
+                ? 'ggml-tiny.bin · ~75 MB · Terbawa di aplikasi, siap pakai offline'
                 : 'ggml-base.bin · ~142 MB · akurasi lebih baik, lebih lambat',
             icon: Icons.mic_none_rounded,
-            status: _whisperDownloading
+            status: selectedWhisperKey == 'tiny'
+                ? 'Terbawa di Aplikasi (Siap Pakai)'
+                : _whisperDownloading
                 ? 'Mengunduh ${(_whisperProgress * 100).toInt()}%'
                 : _whisperSize != null
                 ? 'Terunduh (${_sizeText(_whisperSize)})'
                 : 'Belum diunduh',
             downloading: _whisperDownloading,
             progress: _whisperProgress,
-            onDownload: _downloadWhisper,
-            onDelete: _whisperSize != null ? _deleteWhisper : null,
+            onDownload: selectedWhisperKey == 'tiny' ? () {} : _downloadWhisper,
+            onDelete: selectedWhisperKey != 'tiny' && _whisperSize != null
+                ? _deleteWhisper
+                : null,
+            isReady: selectedWhisperKey == 'tiny' || _whisperSize != null,
           ),
           const SizedBox(height: 12),
           _buildWhisperModelSelector(),
@@ -295,6 +299,7 @@ class _ModelCard extends StatelessWidget {
   final double progress;
   final VoidCallback onDownload;
   final VoidCallback? onDelete;
+  final bool isReady;
 
   const _ModelCard({
     required this.title,
@@ -305,6 +310,7 @@ class _ModelCard extends StatelessWidget {
     required this.progress,
     required this.onDownload,
     this.onDelete,
+    this.isReady = false,
   });
 
   @override
@@ -362,7 +368,7 @@ class _ModelCard extends StatelessWidget {
                       fontWeight: FontWeight.w600,
                       color: downloading
                           ? AppTheme.primaryGold
-                          : status.startsWith('Terunduh')
+                          : isReady || status.startsWith('Terunduh')
                           ? Colors.green
                           : colors.textSecondary,
                     ),
@@ -370,19 +376,20 @@ class _ModelCard extends StatelessWidget {
                 ),
                 if (onDelete != null)
                   TextButton(onPressed: onDelete, child: const Text('Hapus')),
-                FilledButton.icon(
-                  onPressed: downloading ? null : onDownload,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppTheme.primaryGold,
+                if (!isReady)
+                  FilledButton.icon(
+                    onPressed: downloading ? null : onDownload,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppTheme.primaryGold,
+                    ),
+                    icon: Icon(
+                      downloading
+                          ? Icons.hourglass_top_rounded
+                          : Icons.download_rounded,
+                      size: 18,
+                    ),
+                    label: Text(downloading ? 'Mengunduh...' : 'Unduh'),
                   ),
-                  icon: Icon(
-                    downloading
-                        ? Icons.hourglass_top_rounded
-                        : Icons.download_rounded,
-                    size: 18,
-                  ),
-                  label: Text(downloading ? 'Mengunduh...' : 'Unduh'),
-                ),
               ],
             ),
             if (downloading) ...[

@@ -1,10 +1,46 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:whisper_ggml/whisper_ggml.dart';
+import 'package:whisper_cpp_flutter_plus/whisper_cpp_flutter_plus.dart';
+
+enum WhisperModel {
+  tiny(
+    key: 'tiny',
+    fileName: 'ggml-tiny.bin',
+    modelUri:
+        'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
+    isBundled: true,
+    assetPath: 'assets/models/ggml-tiny.bin',
+  ),
+  base(
+    key: 'base',
+    fileName: 'ggml-base.bin',
+    modelUri:
+        'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
+    isBundled: false,
+    assetPath: null,
+  );
+
+  final String key;
+  final String fileName;
+  final String modelUri;
+  final bool isBundled;
+  final String? assetPath;
+
+  const WhisperModel({
+    required this.key,
+    required this.fileName,
+    required this.modelUri,
+    required this.isBundled,
+    this.assetPath,
+  });
+}
 
 class WhisperWord {
   final String word;
@@ -15,50 +51,77 @@ class WhisperWord {
 }
 
 class WhisperService {
-  final WhisperController _controller = WhisperController();
-  WhisperModel model = WhisperModel.base;
+  WhisperModel model = WhisperModel.tiny;
 
   /// Maps a persisted model key ('tiny'|'base') to a [WhisperModel].
   static WhisperModel resolveModel(String key) =>
-      key == 'tiny' ? WhisperModel.tiny : WhisperModel.base;
+      key == 'base' ? WhisperModel.base : WhisperModel.tiny;
 
-  /// Number of parallel processors for whisper.cpp (faster on multi-core).
-  static int get _nProcessors => Platform.numberOfProcessors.clamp(2, 4);
+  /// App support directory that caches the extracted/downloaded Whisper models.
+  Future<String> getModelPath([WhisperModel? targetModel]) async {
+    final m = targetModel ?? model;
+    final support = await getApplicationSupportDirectory();
+    final dir = Directory(p.join(support.path, 'whisper_models'));
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    return p.join(dir.path, m.fileName);
+  }
 
-  /// Whether the local Whisper model has already been downloaded/cached.
-  Future<bool> hasLocalModel() async {
-    final path = await _controller.getPath(model);
+  /// Whether the local Whisper model is available (bundled or cached on disk).
+  Future<bool> hasLocalModel([WhisperModel? targetModel]) async {
+    final m = targetModel ?? model;
+    if (m.isBundled) return true;
+    final path = await getModelPath(m);
     return File(path).exists();
   }
 
   /// Size in bytes of the cached Whisper model, or `null` when not downloaded.
-  Future<int?> localModelSizeBytes() async {
-    final path = await _controller.getPath(model);
+  Future<int?> localModelSizeBytes([WhisperModel? targetModel]) async {
+    final m = targetModel ?? model;
+    final path = await getModelPath(m);
     final file = File(path);
-    if (!await file.exists()) return null;
+    if (!await file.exists()) {
+      if (m.isBundled) return 77595608; // ~74 MB bundled asset
+      return null;
+    }
     return file.length();
   }
 
   /// Removes the cached Whisper model from device storage.
-  Future<void> deleteLocalModel() async {
-    final path = await _controller.getPath(model);
+  Future<void> deleteLocalModel([WhisperModel? targetModel]) async {
+    final path = await getModelPath(targetModel);
     final file = File(path);
     if (await file.exists()) await file.delete();
   }
 
-  /// Returns the local ggml model file, downloading it (with progress) on
-  /// first use. The model is cached in app storage afterwards.
+  /// Returns the local ggml model file, extracting from assets (if bundled)
+  /// or downloading it (with progress) on first use.
   Future<File> getLocalModelFile({
     void Function(double progress)? onProgress,
   }) async {
-    final path = await _controller.getPath(model);
+    final path = await getModelPath();
     final file = File(path);
     if (await file.exists()) return file;
 
     await file.parent.create(recursive: true);
+
+    if (model.isBundled && model.assetPath != null) {
+      onProgress?.call(0.1);
+      final byteData = await rootBundle.load(model.assetPath!);
+      onProgress?.call(0.5);
+      final buffer = byteData.buffer.asUint8List(
+        byteData.offsetInBytes,
+        byteData.lengthInBytes,
+      );
+      await file.writeAsBytes(buffer, flush: true);
+      onProgress?.call(1.0);
+      return file;
+    }
+
     final client = http.Client();
     try {
-      final request = http.Request('GET', model.modelUri);
+      final request = http.Request('GET', Uri.parse(model.modelUri));
       final streamed = await client.send(request);
       final total = streamed.contentLength ?? 0;
       final builder = BytesBuilder(copy: false);
@@ -117,59 +180,89 @@ class WhisperService {
   }
 
   /// Transcribes [audioFile] with on-device Whisper (whisper.cpp via
-  /// whisper_ggml). Returns word-level timestamps which are used both for
-  /// burned subtitles and for highlight analysis.
-  ///
-  /// Goes through `Whisper` + `TranscribeRequest` directly (bypassing
-  /// `WhisperController`, which hardcodes `threads: 6`, disables `speedUp`
-  /// and defaults to `lang: 'en'`) to make inference faster:
-  ///   - [speedUp] uses whisper.cpp's faster, smaller-GMM decoding (~2x).
-  ///   - `threads` scaled dynamically to device cores (2-6).
-  ///   - [lang] defaults to `id` so no language auto-detect pass runs.
+  /// whisper_cpp_flutter_plus). Returns word-level timestamps which are used
+  /// both for burned subtitles and for highlight analysis.
   Future<List<WhisperWord>> transcribeLocalAudio(
     File audioFile, {
     String lang = 'auto',
     bool speedUp = true,
     void Function(double progress)? onProgress,
   }) async {
-    final modelPath = await _controller.getPath(model);
+    final modelFile = await getLocalModelFile(onProgress: onProgress);
+    final pcm16k = await WhisperAudio.readWav(audioFile);
+
+    final engine = await WhisperEngine.load(modelFile.path);
     final threads = Platform.numberOfProcessors.clamp(2, 6);
-    final result = await Whisper(model: model).transcribe(
-      transcribeRequest: TranscribeRequest(
-        audio: audioFile.path,
-        language: lang,
-        threads: threads,
-        nProcessors: _nProcessors,
-        speedUp: speedUp,
-        isNoTimestamps: false,
-        splitOnWord: true,
-        suppressNonSpeechTokens: true,
-      ),
-      modelPath: modelPath,
-      onProgress: (percent) => onProgress?.call(percent / 100.0),
-    );
 
-    final words = <WhisperWord>[];
-    for (final segment
-        in result.segments ?? const <WhisperTranscribeSegment>[]) {
-      final text = segment.text.trim();
-      if (text.isEmpty) continue;
-      words.add(
-        WhisperWord(word: text, start: segment.fromTs, end: segment.toTs),
-      );
-    }
-
-    // Fallback: no word timestamps available, expose the full text.
-    if (words.isEmpty && (result.text.trim().isNotEmpty)) {
-      words.add(
-        WhisperWord(
-          word: result.text.trim(),
-          start: Duration.zero,
-          end: const Duration(seconds: 10),
+    StreamSubscription<int>? progressSub;
+    try {
+      final task = engine.transcribe(
+        pcm16k,
+        options: TranscribeOptions(
+          language: lang,
+          threads: threads,
+          tokenTimestamps: true,
+          splitOnWord: true,
+          suppressNonSpeechTokens: true,
         ),
       );
-    }
 
-    return words;
+      if (onProgress != null) {
+        progressSub = task.progress.listen((percent) {
+          onProgress(percent / 100.0);
+        });
+      }
+
+      final result = await task.result;
+
+      final words = <WhisperWord>[];
+
+      for (final segment in result.segments) {
+        if (segment.tokens.isNotEmpty) {
+          for (final token in segment.tokens) {
+            final t = token.text.trim();
+            if (t.isEmpty) continue;
+            // Ignore special tokens (e.g. [_BEG_], [_TT_...])
+            if (t.startsWith('[_') && t.endsWith(']')) continue;
+            words.add(
+              WhisperWord(
+                word: t,
+                start: token.start,
+                end: token.end > token.start
+                    ? token.end
+                    : token.start + const Duration(milliseconds: 250),
+              ),
+            );
+          }
+        } else {
+          final segText = segment.text.trim();
+          if (segText.isNotEmpty) {
+            words.add(
+              WhisperWord(
+                word: segText,
+                start: segment.start,
+                end: segment.end,
+              ),
+            );
+          }
+        }
+      }
+
+      // Fallback: no word tokens decoded, expose the full text.
+      if (words.isEmpty && result.text.trim().isNotEmpty) {
+        words.add(
+          WhisperWord(
+            word: result.text.trim(),
+            start: Duration.zero,
+            end: const Duration(seconds: 10),
+          ),
+        );
+      }
+
+      return words;
+    } finally {
+      await progressSub?.cancel();
+      engine.dispose();
+    }
   }
 }

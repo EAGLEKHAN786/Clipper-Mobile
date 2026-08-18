@@ -48,9 +48,15 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
 
   Future<String> _resolveTargetDirectory() async {
     if (Platform.isAndroid) {
-      final status = await Permission.storage.request();
+      try {
+        final storageStatus = await Permission.storage.status;
+        if (!storageStatus.isGranted) {
+          await Permission.storage.request();
+        }
+      } catch (_) {}
+
       final downloadDir = Directory('/storage/emulated/0/Download');
-      if (status.isGranted && await downloadDir.exists()) {
+      if (await downloadDir.exists()) {
         return downloadDir.path;
       }
       final external = await getExternalStorageDirectory();

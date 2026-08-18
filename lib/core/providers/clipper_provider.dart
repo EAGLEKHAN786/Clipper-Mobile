@@ -65,7 +65,7 @@ class ClipperState {
     this.projects = const [],
     this.renderedClipsHistory = const [],
     this.transcribeLang = 'auto',
-    this.whisperModel = 'base',
+    this.whisperModel = 'tiny',
     this.faceTrackXPercent,
     this.faceTrackedSegmentId,
     this.faceTrackingRunning = false,
@@ -174,7 +174,7 @@ class ClipperNotifier extends StateNotifier<ClipperState> {
       prefs.getString(_transcribeLangKey) ?? 'auto';
 
   static String _restoreWhisperModel(SharedPreferences prefs) =>
-      prefs.getString(_whisperModelKey) ?? 'base';
+      prefs.getString(_whisperModelKey) ?? 'tiny';
 
   static List<VideoProject> _restoreProjects(SharedPreferences prefs) {
     final raw = prefs.getString(_projectsKey);
@@ -528,13 +528,24 @@ class ClipperNotifier extends StateNotifier<ClipperState> {
       subtitleStyle: state.subtitleStyle,
       transcribeLang: state.transcribeLang,
       whisperModel: state.whisperModel,
+      faceTrackingWarning: null,
+      faceTrackedSegmentId: null,
+      faceTrackXPercent: project.segments.isNotEmpty
+          ? project.segments.first.cropXPercent
+          : null,
       projects: state.projects,
       renderedClipsHistory: state.renderedClipsHistory,
     );
   }
 
   void selectSegment(VideoSegment segment) {
-    state = state.copyWith(selectedSegment: segment);
+    state = state.copyWith(
+      selectedSegment: segment,
+      faceTrackingWarning: null,
+      faceTrackXPercent: segment.cropXPercent,
+      faceTrackedSegmentId:
+          segment.faceKeyframes.isNotEmpty ? segment.id : null,
+    );
   }
 
   /// Runs face tracking on [segment] (extract sample frames + ML Kit lip-motion

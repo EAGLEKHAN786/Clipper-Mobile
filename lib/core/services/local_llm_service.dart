@@ -155,11 +155,13 @@ Balas HANYA dengan JSON valid berbentuk:
       return '$m:$s';
     }
 
-    for (final w in words) {
+    for (var i = 0; i < words.length; i++) {
+      final w = words[i];
       final startSec = w.start.inMilliseconds / 1000.0;
       if (startSec - currentGroupStart >= groupDurationSec &&
-          currentGroupWords.isNotEmpty) {
-        final endSec = words[words.indexOf(w) - 1].end.inMilliseconds / 1000.0;
+          currentGroupWords.isNotEmpty &&
+          i > 0) {
+        final endSec = words[i - 1].end.inMilliseconds / 1000.0;
         buffer.writeln(
           '[${formatTime(currentGroupStart)} - ${formatTime(endSec)} (${currentGroupStart.toInt()}s-${endSec.toInt()}s)] ${currentGroupWords.join(" ")}',
         );
