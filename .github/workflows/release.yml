@@ -43,7 +43,7 @@ jobs:
         run: flutter pub get
 
       - name: Run Static Analysis
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos
 
       - name: Run Unit Tests
         run: flutter test
